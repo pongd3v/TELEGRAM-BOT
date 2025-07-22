@@ -55,8 +55,8 @@ class SuperUtilityBot:
         
         # Bot creator information
         self.creator = "Ankit Kumar"
-        self.version = "2.0"
-        self.support_chat = "@YourSupportChat"  # Replace with your support channel
+        self.version = "1.0"
+        self.support_chat = "@xnkit69"  # Replace with your support channel
 
     def setup_commands_menu(self):
         """Set up bot command menu"""
@@ -82,12 +82,7 @@ class SuperUtilityBot:
             CommandHandler(["ai", "ask"], self.cmd_ai),
             CommandHandler(["image", "generate"], self.cmd_generate_image),
     
-            
-            # Message handlers
-            InlineQueryHandler(self.handle_inline),
-            CallbackQueryHandler(self.handle_callback),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
-        ]
+                    ]
         
         for handler in handlers:
             self.app.add_handler(handler)
