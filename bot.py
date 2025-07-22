@@ -82,8 +82,6 @@ class SuperUtilityBot:
             CommandHandler(["ai", "ask"], self.cmd_ai),
             CommandHandler(["image", "generate"], self.cmd_generate_image),
     
-            # Admin
-            CommandHandler("admin", self.cmd_admin),
             
             # Message handlers
             InlineQueryHandler(self.handle_inline),
