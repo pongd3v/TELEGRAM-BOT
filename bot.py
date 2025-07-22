@@ -76,7 +76,6 @@ class SuperUtilityBot:
         handlers = [
             # Core commands
             CommandHandler("start", self.cmd_start),
-            CommandHandler("help", self.cmd_help),
             CommandHandler("menu", self.cmd_menu),
             CommandHandler("about", self.cmd_about),
             
