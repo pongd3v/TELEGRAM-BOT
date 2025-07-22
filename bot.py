@@ -1,148 +1,224 @@
 import os
 import logging
-import aiohttp
-from telegram import Update
+import threading
+import re
+from datetime import datetime, timedelta
+from typing import Dict, List
+from telegram import (
+    Update, 
+    InlineKeyboardButton, 
+    InlineKeyboardMarkup,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
+    ParseMode,
+    ChatAction,
+    ChatPermissions
+)
 from telegram.ext import (
-    Application,
+    Updater,
     CommandHandler,
-    ContextTypes,
     MessageHandler,
-    filters
+    Filters,
+    InlineQueryHandler,
+    CallbackContext,
+    CallbackQueryHandler,
+    ConversationHandler,
+    PicklePersistence
 )
 
-# Configure logging
+# ===== Configuration =====
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-class AIImageBot:
+# Bot states
+ADMIN_MENU, BAN_REASON, MUTE_DURATION, WARN_USER = range(4)
+
+# Replace with actual IDs
+OWNER_ID = 7834233429
+ADMIN_IDS = 7834233429
+
+# Persistent data storage
+DATA_FILE = "bot_data.pickle"
+persistence = PicklePersistence(filename=DATA_FILE)
+
+# ===== Core Classes =====
+class BotLogger:
+    """Advanced logging system with persistence"""
     def __init__(self):
-        self.token = os.getenv('TELEGRAM_BOT_TOKEN')
-        self.openai_key = os.getenv('OPENAI_API_KEY')
-        self.sd_key = os.getenv('STABLE_DIFFUSION_KEY')
-        self.creator = "Ankit Kumar"
-        self.version = "1.0"
-        
-        if not self.token:
-            raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set")
-            
-        self.app = Application.builder().token(self.token).build()
-        self.setup_handlers()
+        self.logs: List[str] = []
+        self.user_warnings: Dict[int, int] = {}  # user_id: warning_count
+    
+    def log(self, action: str, user_id: int, chat_id: int = None, details: str = ""):
+        entry = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {action} by {user_id}"
+        if chat_id:
+            entry += f" in {chat_id}"
+        if details:
+            entry += f" | Details: {details}"
+        self.logs.append(entry)
+    
+    def add_warning(self, user_id: int):
+        self.user_warnings[user_id] = self.user_warnings.get(user_id, 0) + 1
+    
+    def get_warnings(self, user_id: int):
+        return self.user_warnings.get(user_id, 0)
 
-    def setup_handlers(self):
-        """Register command handlers"""
-        self.app.add_handler(CommandHandler("start", self.start))
-        self.app.add_handler(CommandHandler("about", self.about))
-        self.app.add_handler(CommandHandler("ai", self.ai_chat))
-        self.app.add_handler(CommandHandler("image", self.generate_image))
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+class BotModeration:
+    """Advanced moderation tools"""
+    def __init__(self):
+        self.muted_users: Dict[int, datetime] = {}
+        self.banned_users: Dict[int, str] = {}  # user_id: reason
+    
+    def check_mute_expiry(self):
+        now = datetime.now()
+        expired = [uid for uid, dt in self.muted_users.items() if dt <= now]
+        for uid in expired:
+            del self.muted_users[uid]
 
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Welcome message"""
-        await update.message.reply_text(
-            f"🤖 AI Bot v{self.version}\n"
-            "Available commands:\n"
-            "/ai [prompt] - Chat with AI\n"
-            "/image [description] - Generate image\n"
-            "/about - Bot information"
-        )
+# ===== Global Instances =====
+bot_logger = BotLogger()
+moderation = BotModeration()
 
-    async def about(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show bot info"""
-        await update.message.reply_text(
-            f"✨ AI Image & Chat Bot  ✨\n"
-            f"Version: {self.version}\n"
-            f"Created by: {self.creator}\n\n"
-            "Powered by OpenAI and Stable Diffusion APIs"
-        )
-
-    async def ai_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle AI chat requests"""
-        if not context.args:
-            await update.message.reply_text("Usage: /ai [your question]")
+# ===== Helper Functions =====
+def admin_only(func):
+    """Decorator for admin-only commands"""
+    def wrapper(update: Update, context: CallbackContext):
+        if update.effective_user.id not in ADMIN_IDS:
+            update.message.reply_text("🚫 Admin privileges required!")
             return
-            
-        if not self.openai_key:
-            await update.message.reply_text("AI chat is currently unavailable")
+        return func(update, context)
+    return wrapper
+
+def owner_only(func):
+    """Decorator for owner-only commands"""
+    def wrapper(update: Update, context: CallbackContext):
+        if update.effective_user.id != OWNER_ID:
+            update.message.reply_text("🚫 Owner privileges required!")
             return
-            
-        prompt = ' '.join(context.args)
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.openai_key}"
-                }
-                
-                payload = {
-                    "model": "gpt-3.5-turbo",
-                    "messages": [{"role": "user", "content": prompt}]
-                }
-                
-                async with session.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers=headers,
-                    json=payload
-                ) as resp:
-                    data = await resp.json()
-                    response = data['choices'][0]['message']['content']
-                    await update.message.reply_text(f"🤖 AI says:\n\n{response}")
-                    
-        except Exception as e:
-            logger.error(f"AI Error: {e}")
-            await update.message.reply_text("⚠️ Failed to get AI response")
+        return func(update, context)
+    return wrapper
 
-    async def generate_image(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Generate image using Stable Diffusion"""
-        if not context.args:
-            await update.message.reply_text("Usage: /image [description]")
-            return
-            
-        if not self.sd_key:
-            await update.message.reply_text("Image generation is currently unavailable")
-            return
-            
-        prompt = ' '.join(context.args)
-        await update.message.reply_text(f"🔄 Generating image: {prompt}...")
-        
-        try:
-            # Using Stable Diffusion API
-            url = "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image"
-            headers = {"Authorization": f"Bearer {self.sd_key}"}
-            
-            payload = {
-                "text_prompts": [{"text": prompt}],
-                "cfg_scale": 7,
-                "height": 1024,
-                "width": 1024,
-                "samples": 1
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        image_url = data['artifacts'][0]['base64']
-                        await update.message.reply_photo(photo=image_url, caption=prompt)
-                    else:
-                        await update.message.reply_text(f"⚠️ Error: {resp.status}")
-                        
-        except Exception as e:
-            logger.error(f"Image Gen Error: {e}")
-            await update.message.reply_text("⚠️ Failed to generate image")
+# ===== Enhanced Command Handlers =====
+def start(update: Update, context: CallbackContext):
+    user = update.effective_user
+    welcome_msg = (
+        f"👋 *Welcome {user.first_name}!*\n\n"
+        "🔧 *Advanced Group Management Bot*\n"
+        "- User banning/warning system\n"
+        "- Inline commands\n"
+        "- Admin tools\n"
+        "- Action logging\n"
+        "- User/group info\n\n"
+        "Type /help for commands"
+    )
+    update.message.reply_text(welcome_msg, parse_mode=ParseMode.MARKDOWN)
+    bot_logger.log("Start command", user.id)
 
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle regular messages"""
-        await update.message.reply_text("Please use commands:\n/ai [question]\n/image [description]")
+def help_command(update: Update, context: CallbackContext):
+    help_text = (
+        "📚 *Command List*\n\n"
+        "👮 *Moderation:*\n"
+        "/ban [reply] - Ban user\n"
+        "/unban [id] - Unban user\n"
+        "/warn [reply] - Warn user\n"
+        "/mute [reply] - Mute user\n"
+        "/kick [reply] - Kick user\n\n"
+        "ℹ️ *Info:*\n"
+        "/id [reply] - Get user ID\n"
+        "/ginfo - Group info\n"
+        "/warns [reply] - Check warnings\n\n"
+        "👑 *Admin:*\n"
+        "/admin - Control panel\n"
+        "/logs - View logs (owner)\n"
+        "/cleanup [N] - Delete messages\n\n"
+        "🔎 *Inline:*\n"
+        "Try `@yourbotname warn`"
+    )
+    update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
-    def run(self):
-        """Run the bot"""
-        logger.info(f"Starting AI Bot v{self.version}")
-        self.app.run_polling()
+@admin_only
+def admin_panel(update: Update, context: CallbackContext):
+    keyboard = [
+        [InlineKeyboardButton("🛑 Ban User", callback_data="admin_ban")],
+        [InlineKeyboardButton("⚠️ Warn User", callback_data="admin_warn")],
+        [InlineKeyboardButton("🔇 Mute User", callback_data="admin_mute")],
+        [InlineKeyboardButton("🧹 Cleanup", callback_data="admin_clean")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text("🛠 *Admin Control Panel*", 
+                            reply_markup=reply_markup,
+                            parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_MENU
 
-if __name__ == "__main__":
-    bot = AIImageBot()
-    bot.run()
+# ===== Info Commands =====
+def user_info(update: Update, context: CallbackContext):
+    """Display detailed user information"""
+    user = update.message.reply_to_message.from_user if update.message.reply_to_message else update.effective_user
+    
+    warnings = bot_logger.get_warnings(user.id)
+    status = "Banned" if user.id in moderation.banned_users else "Active"
+    
+    info_text = (
+        f"📋 *User Info*\n\n"
+        f"• Name: {user.full_name}\n"
+        f"• ID: `{user.id}`\n"
+        f"• Username: @{user.username or 'N/A'}\n"
+        f"• Warnings: {warnings}\n"
+        f"• Status: {status}\n"
+        f"[Profile Link](tg://user?id={user.id})"
+    )
+    update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
+
+def group_info(update: Update, context: CallbackContext):
+    """Display detailed chat information"""
+    chat = update.effective_chat
+    
+    members = context.bot.get_chat_members_count(chat.id)
+    created = datetime.fromtimestamp(chat.id>>32).strftime('%Y-%m-%d')
+    
+    info_text = (
+        f"💬 *Group Info*\n\n"
+        f"• Name: {chat.title}\n"
+        f"• ID: `{chat.id}`\n"
+        f"• Type: {chat.type.capitalize()}\n"
+        f"• Members: {members}\n"
+        f"• Created: {created}"
+    )
+    update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
+
+# ===== Main Execution =====
+def main():
+    updater = Updater(os.getenv("TELEGRAM_TOKEN"), persistence=persistence, use_context=True)
+    dp = updater.dispatcher
+
+    # Command Handlers
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("help", help_command))
+    
+    # Info Commands
+    dp.add_handler(CommandHandler("id", user_info))
+    dp.add_handler(CommandHandler("ginfo", group_info))
+    
+    # Admin System
+    admin_conv = ConversationHandler(
+        entry_points=[CommandHandler("admin", admin_panel)],
+        states={
+            ADMIN_MENU: [
+                CallbackQueryHandler(admin_panel, pattern="^admin_.*$")
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", lambda u,c: ConversationHandler.END)],
+        persistent=True
+    )
+    dp.add_handler(admin_conv)
+
+    # Error handler
+    dp.add_error_handler(error_handler)
+
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
