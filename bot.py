@@ -81,36 +81,7 @@ class SuperUtilityBot:
             # AI Features
             CommandHandler(["ai", "ask"], self.cmd_ai),
             CommandHandler(["image", "generate"], self.cmd_generate_image),
-            
-            # Group Management
-            CommandHandler("mod", self.cmd_mod_menu),
-            CommandHandler("warn", self.cmd_warn),
-            CommandHandler("kick", self.cmd_kick),
-            CommandHandler("ban", self.cmd_ban),
-            CommandHandler("mute", self.cmd_mute),
-            CommandHandler("unmute", self.cmd_unmute),
-            CommandHandler("pin", self.cmd_pin),
-            CommandHandler("purge", self.cmd_purge),
-            CommandHandler("settings", self.cmd_group_settings),
-            
-            # Utilities
-            CommandHandler("util", self.cmd_utils_menu),
-            CommandHandler("calc", self.cmd_calc),
-            CommandHandler("convert", self.cmd_convert),
-            CommandHandler("timer", self.cmd_timer),
-            CommandHandler("remind", self.cmd_reminder),
-            CommandHandler("qr", self.cmd_qr),
-            
-            # Fun
-            CommandHandler("fun", self.cmd_fun_menu),
-            CommandHandler("joke", self.cmd_joke),
-            CommandHandler("quote", self.cmd_quote),
-            CommandHandler("font", self.cmd_font),
-            CommandHandler("meme", self.cmd_meme),
-            
-            # Games
-            CommandHandler("games", self.cmd_games),
-            
+    
             # Admin
             CommandHandler("admin", self.cmd_admin),
             
