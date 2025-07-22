@@ -1,27 +1,11 @@
 import os
 import logging
-import random
-import math
-import hashlib
-import asyncio
-import pytz
-import json
-import requests
-from datetime import datetime
-from telegram import (
-    InlineKeyboardButton, 
-    InlineKeyboardMarkup, 
-    Update, 
-    InlineQueryResultArticle, 
-    InputTextMessageContent,
-    ReplyKeyboardMarkup
-)
+import aiohttp
+from telegram import Update
 from telegram.ext import (
-    Application, 
-    CommandHandler, 
-    ContextTypes, 
-    InlineQueryHandler, 
-    CallbackQueryHandler,
+    Application,
+    CommandHandler,
+    ContextTypes,
     MessageHandler,
     filters
 )
@@ -33,134 +17,60 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class SuperUtilityBot:
+class AIImageBot:
     def __init__(self):
-        # Load configuration from environment variables
         self.token = os.getenv('TELEGRAM_BOT_TOKEN')
-        self.admin_ids = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
         self.openai_key = os.getenv('OPENAI_API_KEY')
-        self.stable_diffusion_key = os.getenv('STABLE_DIFFUSION_KEY')
+        self.sd_key = os.getenv('STABLE_DIFFUSION_KEY')
+        self.creator = "Ankit Kumar"
+        self.version = "1.0"
         
         if not self.token:
             raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set")
             
         self.app = Application.builder().token(self.token).build()
-        self.user_logs = {}
-        self.group_settings = {}
-        self.user_data = {}
-        
-        # Initialize all features
-        self.register_handlers()
-        self.setup_commands_menu()
-        
-        # Bot creator information
-        self.creator = "Ankit Kumar"
-        self.version = "1.0"
-        self.support_chat = "@xnkit69"  # Replace with your support channel
+        self.setup_handlers()
 
-    def setup_commands_menu(self):
-        """Set up bot command menu"""
-        commands = [
-            ("start", "Start the bot"),
-            ("help", "Show help menu"),
-            ("ai", "AI assistant"),
-            ("image", "Generate AI images"),
-            ("mod", "Group moderation tools"),
-            ("util", "Utility commands"),
-            ("fun", "Fun commands")
-        ]
-        self.app.bot.set_my_commands(commands)
+    def setup_handlers(self):
+        """Register command handlers"""
+        self.app.add_handler(CommandHandler("start", self.start))
+        self.app.add_handler(CommandHandler("about", self.about))
+        self.app.add_handler(CommandHandler("ai", self.ai_chat))
+        self.app.add_handler(CommandHandler("image", self.generate_image))
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
 
-    def register_handlers(self):
-        """Register all command handlers"""
-        handlers = [
-            # Core commands
-            CommandHandler("start", self.cmd_start),
-            CommandHandler("about", self.cmd_about),
-            
-            # AI Features
-            CommandHandler(["ai", "ask"], self.cmd_ai),
-            CommandHandler(["image", "generate"], self.cmd_generate_image),
-    
-                    ]
-        
-        for handler in handlers:
-            self.app.add_handler(handler)
-
-    # ==========================
-    #  CORE COMMANDS
-    # ==========================
-    async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enhanced welcome message with feature showcase"""
-        welcome_msg = f"""
-🤖 *Welcome to Super Utility Bot* ({self.version})
-
-*Created by:* {self.creator}
-_For any support:_ {self.support_chat}
-
-🔹 *Main Features:*
-- 🧠 AI Chat Assistant (/ai)
-- 🖼️ AI Image Generation (/image)
-- 🛡️ Advanced Group Moderation (/mod)
-- ⚙️ Powerful Utilities (/util)
-- 😂 Fun & Games (/fun)
-
-📌 Use /help for all commands
-📢 Try our inline mode: @{context.bot.username} [query]
-"""
-        keyboard = [
-            [InlineKeyboardButton("🌟 Main Menu", callback_data="main_menu")],
-            [InlineKeyboardButton("🛡️ Group Tools", callback_data="mod_menu")],
-            [InlineKeyboardButton("⚙️ Utilities", callback_data="util_menu")]
-        ]
-        
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Welcome message"""
         await update.message.reply_text(
-            welcome_msg,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
+            f"🤖 AI Bot v{self.version}\n"
+            "Available commands:\n"
+            "/ai [prompt] - Chat with AI\n"
+            "/image [description] - Generate image\n"
+            "/about - Bot information"
         )
 
-    async def cmd_about(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show bot information"""
-        about_text = f"""
-*✅ Super Utility Bot {self.version}*
-_Created by:_ {self.creator}
+    async def about(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show bot info"""
+        await update.message.reply_text(
+            f"✨ AI Image & Chat Bot  ✨\n"
+            f"Version: {self.version}\n"
+            f"Created by: {self.creator}\n\n"
+            "Powered by OpenAI and Stable Diffusion APIs"
+        )
 
-🌐 _Features:_
-• AI Assistant & Image Generation
-• Complete Group Management
-• 50+ Utility Commands
-• Fun & Entertainment
-
-🔧 _Version:_ {self.version}
-📅 _Last Updated:_ {datetime.now().strftime('%Y-%m-%d')}
-
-🤝 _Support:_ {self.support_chat}
-"""
-        await update.message.reply_text(about_text, parse_mode="Markdown")
-
-    # ==========================
-    #  AI FEATURES
-    # ==========================
-    async def cmd_ai(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def ai_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle AI chat requests"""
         if not context.args:
-            help_text = """
-🤖 *AI Assistant Help:*
-/ai [your question] - Get AI response
-/ai image [description] - Generate image
-
-⚙️ *Powered by OpenAI* (GPT-3.5)
-"""
-            await update.message.reply_text(help_text, parse_mode="Markdown")
-            return
-        
-        if not self.openai_key:
-            await update.message.reply_text("⚠️ AI features are currently unavailable")
+            await update.message.reply_text("Usage: /ai [your question]")
             return
             
+        if not self.openai_key:
+            await update.message.reply_text("AI chat is currently unavailable")
+            return
+            
+        prompt = ' '.join(context.args)
+        
         try:
-            query = ' '.join(context.args)
             async with aiohttp.ClientSession() as session:
                 headers = {
                     "Content-Type": "application/json",
@@ -169,10 +79,7 @@ _Created by:_ {self.creator}
                 
                 payload = {
                     "model": "gpt-3.5-turbo",
-                    "messages": [{
-                        "role": "user", 
-                        "content": query
-                    }]
+                    "messages": [{"role": "user", "content": prompt}]
                 }
                 
                 async with session.post(
@@ -182,35 +89,29 @@ _Created by:_ {self.creator}
                 ) as resp:
                     data = await resp.json()
                     response = data['choices'][0]['message']['content']
-                    
-                    await update.message.reply_text(
-                        f"🤖 *AI Response:*\n\n{response}",
-                        parse_mode="Markdown"
-                    )
+                    await update.message.reply_text(f"🤖 AI says:\n\n{response}")
                     
         except Exception as e:
-            logger.error(f"AI Error: {str(e)}")
+            logger.error(f"AI Error: {e}")
             await update.message.reply_text("⚠️ Failed to get AI response")
 
-    async def cmd_generate_image(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Generate image using Stable Diffusion API"""
+    async def generate_image(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Generate image using Stable Diffusion"""
         if not context.args:
             await update.message.reply_text("Usage: /image [description]")
             return
             
-        if not self.stable_diffusion_key:
-            await update.message.reply_text("⚠️ Image generation is currently unavailable")
+        if not self.sd_key:
+            await update.message.reply_text("Image generation is currently unavailable")
             return
             
+        prompt = ' '.join(context.args)
+        await update.message.reply_text(f"🔄 Generating image: {prompt}...")
+        
         try:
-            prompt = ' '.join(context.args)
-            await update.message.reply_text(f"🔄 Generating image for: *{prompt}*...", parse_mode="Markdown")
-            
-            # Using Stable Diffusion API (example)
+            # Using Stable Diffusion API
             url = "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image"
-            headers = {
-                "Authorization": f"Bearer {self.stable_diffusion_key}"
-            }
+            headers = {"Authorization": f"Bearer {self.sd_key}"}
             
             payload = {
                 "text_prompts": [{"text": prompt}],
@@ -222,83 +123,26 @@ _Created by:_ {self.creator}
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers, json=payload) as resp:
-                    data = await resp.json()
-                    
-                    if 'artifacts' in data:
+                    if resp.status == 200:
+                        data = await resp.json()
                         image_url = data['artifacts'][0]['base64']
-                        await update.message.reply_photo(photo=image_url, caption=f"🖼️ Generated: *{prompt}*", parse_mode="Markdown")
+                        await update.message.reply_photo(photo=image_url, caption=prompt)
                     else:
-                        await update.message.reply_text("⚠️ Failed to generate image")
+                        await update.message.reply_text(f"⚠️ Error: {resp.status}")
                         
         except Exception as e:
-            logger.error(f"Image Gen Error: {str(e)}")
-            await update.message.reply_text("⚠️ Error generating image")
+            logger.error(f"Image Gen Error: {e}")
+            await update.message.reply_text("⚠️ Failed to generate image")
 
-    # ==========================
-    #  GROUP MANAGEMENT
-    # ==========================
-    async def cmd_mod_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show moderation tools menu"""
-        keyboard = [
-            [InlineKeyboardButton("⚠️ Warn User", callback_data="mod_warn")],
-            [InlineKeyboardButton("👢 Kick User", callback_data="mod_kick")],
-            [InlineKeyboardButton("🔨 Ban User", callback_data="mod_ban")],
-            [InlineKeyboardButton("🔇 Mute User", callback_data="mod_mute")],
-            [InlineKeyboardButton("🧹 Purge Messages", callback_data="mod_purge")],
-            [InlineKeyboardButton("📌 Pin Message", callback_data="mod_pin")]
-        ]
-        
-        await update.message.reply_text(
-            "🛡️ *Moderation Tools* - Select an action:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-
-    async def cmd_warn(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Warn a user in group"""
-        if not await self.is_admin(update.effective_user):
-            await update.message.reply_text("❌ You need to be admin to use this")
-            return
-            
-        if not context.args or not update.message.reply_to_message:
-            await update.message.reply_text("Usage: Reply to a message with /warn [reason]")
-            return
-            
-        user = update.message.reply_to_message.from_user
-        reason = ' '.join(context.args)
-        
-        warnings = self.group_settings.setdefault(update.effective_chat.id, {}).setdefault('warnings', {})
-        warnings[user.id] = warnings.get(user.id, 0) + 1
-        
-        warn_msg = (
-            f"⚠️ *Warning* ⚠️\n"
-            f"User: {user.mention_markdown()}\n"
-            f"Reason: {reason}\n"
-            f"Total Warnings: {warnings[user.id]}/3\n\n"
-            f"_Issued by:_ {update.effective_user.mention_markdown()}"
-        )
-        
-        await update.message.reply_text(warn_msg, parse_mode="Markdown")
-        
-        if warnings[user.id] >= 3:
-            await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-            await update.message.reply_text(f"🚷 User {user.mention_markdown()} banned for 3 warnings", parse_mode="Markdown")
-
-    # ==========================
-    #  HELPER METHODS
-    # ==========================
-    async def is_admin(self, user) -> bool:
-        """Check if user is admin"""
-        return user.id in self.admin_ids
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle regular messages"""
+        await update.message.reply_text("Please use commands:\n/ai [question]\n/image [description]")
 
     def run(self):
         """Run the bot"""
-        logger.info(f"Starting Super Utility Bot v{self.version}")
+        logger.info(f"Starting AI Bot v{self.version}")
         self.app.run_polling()
 
-# ==========================
-#  DEPLOYMENT SETUP
-# ==========================
 if __name__ == "__main__":
-    bot = SuperUtilityBot()
+    bot = AIImageBot()
     bot.run()
